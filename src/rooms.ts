@@ -54,6 +54,7 @@ export function toView(room: Room, forPlayerId: string): RoomView {
     defenderId: defender?.id ?? '',
     canThrow: canThrow(room, forPlayerId),
     fool: room.fool,
+    lastDiscard: room.lastDiscard,
   };
 }
 
@@ -65,7 +66,7 @@ export function createRoom(socketId: string, name: string): Room {
   const room: Room = {
     code, players: [host], phase: 'lobby', hostId: socketId,
     deck: [], trumpSuit: null, table: [],
-    attackerIdx: 0, defenderIdx: 0, fool: null,
+    attackerIdx: 0, defenderIdx: 0, fool: null, lastDiscard: null,
   };
   rooms.set(code, room);
   playerRoom.set(socketId, code);
@@ -95,6 +96,7 @@ export function startGame(socketId: string): { room: Room } | { error: string } 
   room.deck = createDeck();
   room.table = [];
   room.fool = null;
+  room.lastDiscard = null;
   room.phase = 'playing';
   for (const p of room.players) { p.hand = []; p.isDone = false; }
 
@@ -243,7 +245,8 @@ export function doneTurn(socketId: string): { room: Room } | { error: string } {
   if (room.table.length === 0) return { error: 'Сначала сыграйте хотя бы одну карту' };
   if (room.table.some(s => s.defense === null)) return { error: 'Не все карты на столе прикрыты' };
 
-  // Successful defence — discard table
+  // Successful defence — save and discard table
+  room.lastDiscard = room.table;
   room.table = [];
   const oldDefenderIdx = room.defenderIdx;
 

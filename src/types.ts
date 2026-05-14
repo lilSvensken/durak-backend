@@ -31,6 +31,7 @@ export interface Room {
   attackerIdx: number;
   defenderIdx: number;
   fool: string | null;
+  lastDiscard: AttackSlot[] | null;
 }
 
 export interface PlayerView {
@@ -54,11 +55,13 @@ export interface RoomView {
   defenderId: string;
   canThrow: boolean;
   fool: string | null;
+  lastDiscard: AttackSlot[] | null;
 }
 
 export interface ServerToClientEvents {
   'room:updated': (room: RoomView) => void;
   'room:error': (message: string) => void;
+  'react:received': (payload: { playerId: string; emoji: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -71,4 +74,5 @@ export interface ClientToServerEvents {
   'game:throw': (card: Card, cb: (err: string | null) => void) => void;
   'game:take': (cb: (err: string | null) => void) => void;
   'game:done': (cb: (err: string | null) => void) => void;
+  'game:react': (emoji: string) => void;
 }

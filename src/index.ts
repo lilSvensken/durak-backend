@@ -5,7 +5,7 @@ import cors from 'cors';
 import { ServerToClientEvents, ClientToServerEvents, Room } from './types';
 import {
   createRoom, joinRoom, startGame, leaveRoom, toView,
-  attackCard, defendCard, throwCard, takeCards, doneTurn,
+  attackCard, defendCard, throwCard, takeCards, doneTurn, getRoomBySocket,
 } from './rooms';
 
 const app = express();
@@ -79,6 +79,12 @@ io.on('connection', (socket) => {
     if ('error' in result) return cb(result.error);
     cb(null);
     broadcast(result.room);
+  });
+
+  socket.on('game:react', (emoji: string) => {
+    const room = getRoomBySocket(socket.id);
+    if (!room) return;
+    io.to(room.code).emit('react:received', { playerId: socket.id, emoji });
   });
 
   socket.on('room:leave', () => handleLeave(socket.id));
