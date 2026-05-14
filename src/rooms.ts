@@ -30,7 +30,6 @@ function canThrow(room: Room, playerId: string): boolean {
   return player.hand.some(c => ranks.has(c.rank));
 }
 
-// Build a personalised RoomView for each socket
 export function toView(room: Room, forPlayerId: string): RoomView {
   const player = room.players.find(p => p.id === forPlayerId);
   const attacker = room.players[room.attackerIdx];
@@ -54,7 +53,7 @@ export function toView(room: Room, forPlayerId: string): RoomView {
     defenderId: defender?.id ?? '',
     canThrow: canThrow(room, forPlayerId),
     fool: room.fool,
-    lastDiscard: room.lastDiscard,
+    defenderTaking: room.defenderTaking,
   };
 }
 
@@ -66,7 +65,7 @@ export function createRoom(socketId: string, name: string): Room {
   const room: Room = {
     code, players: [host], phase: 'lobby', hostId: socketId,
     deck: [], trumpSuit: null, table: [],
-    attackerIdx: 0, defenderIdx: 0, fool: null, lastDiscard: null,
+    attackerIdx: 0, defenderIdx: 0, fool: null, defenderTaking: false,
   };
   rooms.set(code, room);
   playerRoom.set(socketId, code);
@@ -96,7 +95,7 @@ export function startGame(socketId: string): { room: Room } | { error: string } 
   room.deck = createDeck();
   room.table = [];
   room.fool = null;
-  room.lastDiscard = null;
+  room.defenderTaking = false;
   room.phase = 'playing';
   for (const p of room.players) { p.hand = []; p.isDone = false; }
 
@@ -125,11 +124,11 @@ export function leaveRoom(socketId: string): { room: Room | null; code: string |
     room.hostId = room.players[0].id;
   }
 
-  // Reset to lobby if a player leaves mid-game
   if (wasPlaying) {
     room.phase = 'lobby';
     room.table = [];
     room.deck = [];
+    room.defenderTaking = false;
     for (const p of room.players) { p.hand = []; p.isDone = false; }
   }
 
@@ -152,7 +151,9 @@ export function attackCard(
   const attacker = room.players[room.attackerIdx];
   if (attacker.id !== socketId) return { error: 'Сейчас не ваш ход атаки' };
 
-  if (room.table.length >= maxAttackSlots(room)) return { error: 'Нельзя добавить больше карт' };
+  if (!room.defenderTaking && room.table.length >= maxAttackSlots(room)) {
+    return { error: 'Нельзя добавить больше карт' };
+  }
 
   if (room.table.length > 0) {
     const ranks = getTableRanks(room.table);
@@ -169,6 +170,7 @@ export function defendCard(
 ): { room: Room } | { error: string } {
   const room = getRoomBySocket(socketId);
   if (!room || room.phase !== 'playing') return { error: 'Нет активной игры' };
+  if (room.defenderTaking) return { error: 'Вы уже решили взять карты' };
 
   const defender = room.players[room.defenderIdx];
   if (defender.id !== socketId) return { error: 'Вы не защищаетесь' };
@@ -201,28 +203,41 @@ export function throwCard(
   return { room };
 }
 
-export function takeCards(socketId: string): { room: Room } | { error: string } {
+// Defender requests to take — attacker must confirm before cards move
+export function requestTake(socketId: string): { room: Room } | { error: string } {
   const room = getRoomBySocket(socketId);
   if (!room || room.phase !== 'playing') return { error: 'Нет активной игры' };
 
   const defender = room.players[room.defenderIdx];
   if (defender.id !== socketId) return { error: 'Вы не защищаетесь' };
   if (room.table.length === 0) return { error: 'На столе нет карт' };
-  if (room.table.every(s => s.defense !== null)) return { error: 'Все карты уже прикрыты — используйте "Готово"' };
+  if (room.defenderTaking) return { error: 'Вы уже решили взять карты' };
 
-  // Defender takes all table cards into hand
+  room.defenderTaking = true;
+  return { room };
+}
+
+// Attacker confirms take — cards move to defender
+export function confirmTake(socketId: string): { room: Room } | { error: string } {
+  const room = getRoomBySocket(socketId);
+  if (!room || room.phase !== 'playing') return { error: 'Нет активной игры' };
+
+  const attacker = room.players[room.attackerIdx];
+  if (attacker.id !== socketId) return { error: 'Только атакующий подтверждает взятие' };
+  if (!room.defenderTaking) return { error: 'Защитник не запрашивал взятие' };
+
+  const defender = room.players[room.defenderIdx];
   for (const slot of room.table) {
     defender.hand.push(slot.attack);
     if (slot.defense) defender.hand.push(slot.defense);
   }
   room.table = [];
+  room.defenderTaking = false;
 
-  // Refill everyone except defender
   refillHands(room, true);
   markDonePlayers(room);
   if (checkGameEnd(room)) return { room };
 
-  // Defender is skipped for the next attack
   const newAttackerIdx = nextActiveIdx(room.players, room.defenderIdx);
   room.attackerIdx = newAttackerIdx;
   room.defenderIdx = nextActiveIdx(room.players, newAttackerIdx);
@@ -236,26 +251,20 @@ export function doneTurn(socketId: string): { room: Room } | { error: string } {
   const attacker = room.players[room.attackerIdx];
   const defender = room.players[room.defenderIdx];
 
-  // Throwers (canThrow players) calling done is a no-op
   if (attacker.id !== socketId && defender.id !== socketId) return { room };
 
   if (defender.id === socketId) return { error: 'Прикройте все карты или возьмите их' };
-
-  // Attacker ending their turn
+  if (room.defenderTaking) return { error: 'Защитник берёт — подтвердите или подкиньте карты' };
   if (room.table.length === 0) return { error: 'Сначала сыграйте хотя бы одну карту' };
   if (room.table.some(s => s.defense === null)) return { error: 'Не все карты на столе прикрыты' };
 
-  // Successful defence — save and discard table
-  room.lastDiscard = room.table;
   room.table = [];
   const oldDefenderIdx = room.defenderIdx;
 
-  // Everyone refills, defender last
   refillHands(room, false);
   markDonePlayers(room);
   if (checkGameEnd(room)) return { room };
 
-  // Defender becomes new attacker (or next active if they finished)
   const nextAttackerIdx = room.players[oldDefenderIdx].isDone
     ? nextActiveIdx(room.players, oldDefenderIdx)
     : oldDefenderIdx;

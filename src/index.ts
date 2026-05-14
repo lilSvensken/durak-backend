@@ -5,7 +5,7 @@ import cors from 'cors';
 import { ServerToClientEvents, ClientToServerEvents, Room } from './types';
 import {
   createRoom, joinRoom, startGame, leaveRoom, toView,
-  attackCard, defendCard, throwCard, takeCards, doneTurn, getRoomBySocket,
+  attackCard, defendCard, throwCard, requestTake, confirmTake, doneTurn, getRoomBySocket,
 } from './rooms';
 
 const app = express();
@@ -68,7 +68,14 @@ io.on('connection', (socket) => {
   });
 
   socket.on('game:take', (cb) => {
-    const result = takeCards(socket.id);
+    const result = requestTake(socket.id);
+    if ('error' in result) return cb(result.error);
+    cb(null);
+    broadcast(result.room);
+  });
+
+  socket.on('game:confirm_take', (cb) => {
+    const result = confirmTake(socket.id);
     if ('error' in result) return cb(result.error);
     cb(null);
     broadcast(result.room);
